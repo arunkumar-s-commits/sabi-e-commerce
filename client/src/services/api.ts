@@ -1,4 +1,4 @@
-import { auth } from './firebase';
+import { supabase } from './supabase';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -9,18 +9,18 @@ interface RequestOptions extends RequestInit {
 export const apiRequest = async (endpoint: string, options: RequestOptions = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   
-  // Retrieve token dynamically from Firebase Auth
+  // Retrieve token dynamically from Supabase Auth
   let token = null;
   try {
-    const currentUser = auth.currentUser;
-    if (currentUser) {
-      token = await currentUser.getIdToken();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      token = session.access_token;
     } else {
       // Look up fallback token from localStorage if set (e.g. for development bypasses)
       token = localStorage.getItem('sabi_fallback_token');
     }
   } catch (err) {
-    console.warn('Could not read firebase auth token:', err);
+    console.warn('Could not read supabase auth token:', err);
   }
 
   const headers = new Headers(options.headers || {});

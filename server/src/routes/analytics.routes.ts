@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { sendSuccess, sendError } from '../utils/response';
 
@@ -15,11 +15,14 @@ router.get(
   async (req: AuthenticatedRequest, res: any) => {
     try {
       // 1. Fetch Orders & Customers
-      const ordersSnapshot = await db.collection('orders').get();
-      const usersSnapshot = await db.collection('users').where('role', '==', 'customer').get();
+      const { data: orders, error: ordersError } = await supabase.from('orders').select('*');
+      const { data: users, error: usersError } = await supabase.from('profiles').select('id').eq('role', 'user');
 
-      const totalCustomers = usersSnapshot.size;
-      const totalOrders = ordersSnapshot.size;
+      if (ordersError) throw ordersError;
+      if (usersError) throw usersError;
+
+      const totalCustomers = users ? users.length : 0;
+      const totalOrders = orders ? orders.length : 0;
 
       let totalRevenue = 0;
       let pendingOrders = 0;
@@ -27,36 +30,37 @@ router.get(
       const monthlyRevenueMap: Record<string, number> = {};
       const productSalesMap: Record<string, { title: string; sales: number; revenue: number }> = {};
 
-      ordersSnapshot.forEach((doc) => {
-        const order = doc.data();
-        const orderTotal = order.pricing?.total || 0;
-        const isPaid = order.payment?.status === 'success' || order.payment?.method === 'COD';
+      if (orders) {
+        orders.forEach((order: any) => {
+          const orderTotal = order.pricing?.total || 0;
+          const isPaid = order.payment?.status === 'success' || order.payment?.method === 'COD';
 
-        if (isPaid && order.status !== 'cancelled') {
-          totalRevenue += orderTotal;
+          if (isPaid && order.status !== 'cancelled') {
+            totalRevenue += orderTotal;
 
-          // Group by Month (YYYY-MM)
-          if (order.createdAt) {
-            const monthKey = order.createdAt.substring(0, 7); // "2026-06"
-            monthlyRevenueMap[monthKey] = (monthlyRevenueMap[monthKey] || 0) + orderTotal;
+            // Group by Month (YYYY-MM)
+            if (order.createdAt) {
+              const monthKey = order.createdAt.substring(0, 7); // "2026-06"
+              monthlyRevenueMap[monthKey] = (monthlyRevenueMap[monthKey] || 0) + orderTotal;
+            }
+
+            // Count sold products
+            const items = order.items || [];
+            items.forEach((item: any) => {
+              const current = productSalesMap[item.productId] || { title: item.title || 'Product', sales: 0, revenue: 0 };
+              current.sales += item.qty;
+              current.revenue += (item.price * item.qty);
+              productSalesMap[item.productId] = current;
+            });
           }
 
-          // Count sold products
-          const items = order.items || [];
-          items.forEach((item: any) => {
-            const current = productSalesMap[item.productId] || { title: item.title || 'Product', sales: 0, revenue: 0 };
-            current.sales += item.qty;
-            current.revenue += (item.price * item.qty);
-            productSalesMap[item.productId] = current;
-          });
-        }
-
-        if (order.status === 'pending') {
-          pendingOrders++;
-        } else if (order.status === 'delivered') {
-          deliveredOrders++;
-        }
-      });
+          if (order.status === 'pending') {
+            pendingOrders++;
+          } else if (order.status === 'delivered') {
+            deliveredOrders++;
+          }
+        });
+      }
 
       // 2. Average Order Value (AOV)
       const avgOrderValue = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;

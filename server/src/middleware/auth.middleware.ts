@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { auth, db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { sendError } from '../utils/response';
 
 export interface AuthenticatedRequest extends Request {
@@ -7,7 +7,7 @@ export interface AuthenticatedRequest extends Request {
     uid: string;
     email?: string;
     name?: string;
-    role: 'customer' | 'admin';
+    role: 'customer' | 'admin' | 'user';
   };
 }
 
@@ -44,35 +44,41 @@ export const requireAuth = async (
       return next();
     }
 
-    // Verify live token
-    const decodedToken = await auth.verifyIdToken(token);
-    const { uid, email, name } = decodedToken;
+    // Verify live token with Supabase Auth
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
-    // Fetch user role from Firestore
-    let role: 'customer' | 'admin' = 'customer';
+    if (error || !user) {
+      console.error('Supabase Auth Error:', error);
+      return sendError(res, 'Invalid or expired authorization token.', 401);
+    }
+
+    // Fetch user role from profiles table (assuming role is stored there)
+    let role: 'customer' | 'admin' | 'user' = 'user';
     try {
-      const userDoc = await db.collection('users').doc(uid).get();
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        if (userData && userData.role === 'admin') {
-          role = 'admin';
-        }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+        
+      if (profile && profile.role === 'admin') {
+        role = 'admin';
       }
     } catch (dbErr) {
-      console.warn(`Could not fetch user document for ${uid}, defaulting role to customer:`, dbErr);
+      console.warn(`Could not fetch user document for ${user.id}, defaulting role to user:`, dbErr);
     }
 
     req.user = {
-      uid,
-      email,
-      name,
+      uid: user.id,
+      email: user.email,
+      name: user.user_metadata?.full_name || '',
       role,
     };
 
     next();
   } catch (error: any) {
     console.error('Authentication Error:', error);
-    return sendError(res, 'Invalid or expired authorization token.', 401);
+    return sendError(res, 'Authentication failed.', 401);
   }
 };
 

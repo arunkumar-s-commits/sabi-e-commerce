@@ -1,173 +1,11 @@
 import { Router, Request } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
-import { uploadImage } from '../config/cloudinary';
 
 const router = Router();
-
-// Sample Luxury Gifting Products Seed Data
-const LUXURY_SEED_PRODUCTS = [
-  {
-    title: 'Venezia Silk Tambulam Bag',
-    description: 'Exquisitely crafted Venezia silk bag featuring premium zari borders and double handles. Perfect for weddings, baby showers, and traditional festivities.',
-    price: 149,
-    compareAtPrice: 199,
-    images: ['https://images.unsplash.com/photo-1549465220-1a8b9238cd48?q=80&w=600&auto=format&fit=crop'],
-    videoUrl: '',
-    category: 'wedding-essentials',
-    occasions: ['Wedding', 'Festival', 'Baby Shower'],
-    tags: ['Best Seller', 'Tambulam Bags'],
-    variants: [
-      { id: 'v1', size: 'Medium', material: 'Venezia Silk', color: 'Royal Red', price: 149, stock: 120 },
-      { id: 'v2', size: 'Medium', material: 'Venezia Silk', color: 'Gold Mustard', price: 149, stock: 95 }
-    ],
-    stock: 215,
-    rating: 4.8,
-    reviewsCount: 38,
-    isPremium: false,
-    isBestSeller: true,
-    specifications: [
-      { key: 'Material', value: 'Raw Venezia Silk with Zari' },
-      { key: 'Size', value: '8 x 6 inches' },
-      { key: 'Closure', value: 'Drawstring / Potli style' }
-    ],
-    faqs: [
-      { question: 'Can we order custom colors?', answer: 'Yes, for orders above 100 pieces, custom color options are available.' },
-      { question: 'Is the lining durable?', answer: 'Yes, we use 70GSM taffeta lining for premium strength.' }
-    ]
-  },
-  {
-    title: 'Heritage Brass Kumkum Box Gift Set',
-    description: 'Handcrafted pure brass minakari box featuring double compartments for Kumkum and Turmeric. Packaged in a gold-foil rigid box.',
-    price: 349,
-    compareAtPrice: 499,
-    images: ['https://images.unsplash.com/photo-1513519245088-0e12902e5a38?q=80&w=600&auto=format&fit=crop'],
-    category: 'return-gifts',
-    occasions: ['Wedding', 'Housewarming', 'Festival'],
-    tags: ['Best Seller', 'Home Decor'],
-    variants: [
-      { id: 'k1', size: 'Standard', material: 'Brass', color: 'Gold Minakari', price: 349, stock: 50 }
-    ],
-    stock: 50,
-    rating: 4.9,
-    reviewsCount: 15,
-    isPremium: true,
-    isBestSeller: true,
-    specifications: [
-      { key: 'Material', value: 'Solid Brass & Enamel Paint' },
-      { key: 'Weight', value: '180 grams' }
-    ],
-    faqs: [
-      { question: 'Does it tarnish over time?', answer: 'It is coated with clear lacquer to maintain its shine for years. Clean with dry cloth.' }
-    ]
-  },
-  {
-    title: 'Royal Mughal Wooden Dry Fruit Box',
-    description: 'A luxurious wooden chest box with brass embossing, filled with premium selected dry fruits. A classic gift for weddings and high-end corporate events.',
-    price: 899,
-    compareAtPrice: 1200,
-    images: ['https://images.unsplash.com/photo-1549465220-1a8b9238cd48?q=80&w=600&auto=format&fit=crop'],
-    category: 'hampers',
-    occasions: ['Corporate Event', 'Wedding', 'Festival'],
-    tags: ['Hampers', 'Premium Gifting'],
-    variants: [
-      { id: 'db1', size: '4 Slots', material: 'Teak Wood & Brass', color: 'Antique Brown', price: 899, stock: 80 }
-    ],
-    stock: 80,
-    rating: 4.7,
-    reviewsCount: 42,
-    isPremium: true,
-    isBestSeller: false,
-    specifications: [
-      { key: 'Wood Type', value: 'Teak wood structure' },
-      { key: 'Dimensions', value: '10 x 10 x 3 inches' }
-    ],
-    faqs: [
-      { question: 'Are the dry fruits fresh?', answer: 'We pack dry fruits on the day of dispatch in sealed vacuum pouches.' }
-    ]
-  },
-  {
-    title: 'The Executive Leather Desk Kit',
-    description: 'Vegan leather desk organizer bundle featuring a personalized notebook, gold metal pen, cardholder, and thermal coffee tumbler.',
-    price: 1499,
-    compareAtPrice: 2000,
-    images: ['https://images.unsplash.com/photo-1506784983877-45594efa4cbe?q=80&w=600&auto=format&fit=crop'],
-    category: 'corporate-gifts',
-    occasions: ['Corporate Event'],
-    tags: ['Employee Kits', 'Corporate Gifts'],
-    variants: [
-      { id: 'l1', size: 'Full Kit', material: 'Vegan Leather & Steel', color: 'Midnight Black', price: 1499, stock: 200 },
-      { id: 'l2', size: 'Full Kit', material: 'Vegan Leather & Steel', color: 'Tan Brown', price: 1499, stock: 150 }
-    ],
-    stock: 350,
-    rating: 4.6,
-    reviewsCount: 29,
-    isPremium: true,
-    isBestSeller: false,
-    specifications: [
-      { key: 'Tumbler Capacity', value: '450 ml' },
-      { key: 'Diary Type', value: 'A5 Notebook, Ruled, 80GSM' }
-    ],
-    faqs: [
-      { question: 'Can we add our company logo?', answer: 'Yes, custom logo embossing is complimentary on orders of 25+ sets.' }
-    ]
-  },
-  {
-    title: 'Sandalwood Fragrance Potpourri Hamper',
-    description: 'An elegant glass jar containing premium sandalwood potpourri, scented soy wax candle, and a brass wick trimmer. Adorned with gold lace ribbons.',
-    price: 499,
-    compareAtPrice: 650,
-    images: ['https://images.unsplash.com/photo-1603006905003-be475563bc59?q=80&w=600&auto=format&fit=crop'],
-    category: 'personalized-gifts',
-    occasions: ['Housewarming', 'Birthday', 'Festival'],
-    tags: ['Personalized Gifts', 'Hampers'],
-    variants: [
-      { id: 'sh1', size: 'Standard', material: 'Glass & Soy Wax', color: 'Gold Sandalwood', price: 499, stock: 75 }
-    ],
-    stock: 75,
-    rating: 4.5,
-    reviewsCount: 11,
-    isPremium: false,
-    isBestSeller: false,
-    specifications: [
-      { key: 'Burn Time', value: '30 hours' },
-      { key: 'Fragrance', value: 'Sandalwood & Jasmine' }
-    ],
-    faqs: [
-      { question: 'Is it soot-free?', answer: 'Yes, we use 100% natural soy wax with cotton wicks for clean burning.' }
-    ]
-  }
-];
-
-// Helper: Seed initial products if DB empty
-const seedProductsIfEmpty = async () => {
-  try {
-    const productsSnapshot = await db.collection('products').limit(1).get();
-    if (productsSnapshot.empty) {
-      console.log('Seeding initial luxury products into database...');
-      const batch = db.batch();
-      for (const prod of LUXURY_SEED_PRODUCTS) {
-        const docRef = db.collection('products').doc();
-        batch.set(docRef, {
-          ...prod,
-          id: docRef.id,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
-      }
-      await batch.commit();
-      console.log('Successfully seeded database with luxury products.');
-    }
-  } catch (err) {
-    console.error('Error seeding products:', err);
-  }
-};
-
-// Seed trigger
-seedProductsIfEmpty();
 
 // @route   GET /api/products
 // @desc    Get all products with filters
@@ -186,56 +24,54 @@ router.get('/', async (req: Request, res: any) => {
       sort,
     } = req.query;
 
-    let queryRef: FirebaseFirestore.Query = db.collection('products');
+    let query = supabase.from('products').select('*');
 
-    // Filter by fields (Firestore only supports simple query chaining, complex filtering done post-fetch to avoid composite index limits)
     if (category) {
-      queryRef = queryRef.where('category', '==', category);
-    }
-    
-    const snapshot = await queryRef.get();
-    let products: any[] = [];
-    snapshot.forEach((doc) => {
-      products.push(doc.data());
-    });
-
-    // Post-processing filter logic to avoid indexing errors
-    if (occasion) {
-      products = products.filter((p) => p.occasions && p.occasions.includes(occasion));
-    }
-    if (tag) {
-      products = products.filter((p) => p.tags && p.tags.includes(tag));
+      query = query.eq('category', category);
     }
     if (minPrice) {
-      products = products.filter((p) => p.price >= parseFloat(minPrice as string));
+      query = query.gte('price', parseFloat(minPrice as string));
     }
     if (maxPrice) {
-      products = products.filter((p) => p.price <= parseFloat(maxPrice as string));
+      query = query.lte('price', parseFloat(maxPrice as string));
     }
     if (rating) {
-      products = products.filter((p) => p.rating >= parseFloat(rating as string));
+      query = query.gte('rating', parseFloat(rating as string));
     }
     if (isPremium !== undefined) {
-      const premVal = isPremium === 'true';
-      products = products.filter((p) => p.isPremium === premVal);
+      query = query.eq('isPremium', isPremium === 'true');
     }
     if (isBestSeller !== undefined) {
-      const bestVal = isBestSeller === 'true';
-      products = products.filter((p) => p.isBestSeller === bestVal);
+      query = query.eq('isBestSeller', isBestSeller === 'true');
+    }
+    
+    // Arrays overlap for occasion and tag
+    if (occasion) {
+      query = query.contains('occasions', [occasion]);
+    }
+    if (tag) {
+      query = query.contains('tags', [tag]);
     }
 
     // Sort options
     if (sort) {
       if (sort === 'price_asc') {
-        products.sort((a, b) => a.price - b.price);
+        query = query.order('price', { ascending: true });
       } else if (sort === 'price_desc') {
-        products.sort((a, b) => b.price - a.price);
+        query = query.order('price', { ascending: false });
       } else if (sort === 'rating') {
-        products.sort((a, b) => b.rating - a.rating);
+        query = query.order('rating', { ascending: false });
       } else if (sort === 'newest') {
-        products.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        query = query.order('createdAt', { ascending: false });
       }
+    } else {
+      // default sort
+      query = query.order('createdAt', { ascending: false });
     }
+
+    const { data: products, error } = await query;
+
+    if (error) throw error;
 
     return sendSuccess(res, products, 'Products fetched successfully');
   } catch (error) {
@@ -249,32 +85,29 @@ router.get('/', async (req: Request, res: any) => {
 // @access  Public
 router.get('/search', async (req: Request, res: any) => {
   try {
-    const query = (req.query.q as string || '').toLowerCase().trim();
-    if (!query) {
+    const searchQuery = (req.query.q as string || '').toLowerCase().trim();
+    if (!searchQuery) {
       return sendSuccess(res, [], 'Search query is empty');
     }
 
-    const snapshot = await db.collection('products').get();
-    const suggestions: any[] = [];
+    // using ilike for case-insensitive search
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('id, title, category, price, images')
+      .or(`title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%,category.ilike.%${searchQuery}%`)
+      .limit(10);
 
-    snapshot.forEach((doc) => {
-      const data = doc.data();
-      const title = data.title.toLowerCase();
-      const desc = data.description.toLowerCase();
-      const cat = data.category.toLowerCase();
-      
-      if (title.includes(query) || desc.includes(query) || cat.includes(query)) {
-        suggestions.push({
-          id: data.id,
-          title: data.title,
-          category: data.category,
-          price: data.price,
-          image: data.images[0] || '',
-        });
-      }
-    });
+    if (error) throw error;
 
-    return sendSuccess(res, suggestions.slice(0, 10), 'Search completed successfully');
+    const suggestions = products.map((data: any) => ({
+      id: data.id,
+      title: data.title,
+      category: data.category,
+      price: data.price,
+      image: data.images && data.images.length > 0 ? data.images[0] : '',
+    }));
+
+    return sendSuccess(res, suggestions, 'Search completed successfully');
   } catch (error) {
     console.error('Search query failed:', error);
     return sendError(res, 'Search suggestion failed', 500);
@@ -286,14 +119,20 @@ router.get('/search', async (req: Request, res: any) => {
 // @access  Public
 router.get('/:id', async (req: Request, res: any) => {
   try {
-    const productRef = db.collection('products').doc(req.params.id);
-    const doc = await productRef.get();
+    const { data: product, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
 
-    if (!doc.exists) {
-      return sendError(res, 'Product not found', 404);
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return sendError(res, 'Product not found', 404);
+      }
+      throw error;
     }
 
-    return sendSuccess(res, doc.data(), 'Product details fetched');
+    return sendSuccess(res, product, 'Product details fetched');
   } catch (error) {
     console.error('Error fetching product detail:', error);
     return sendError(res, 'Failed to fetch product details', 500);
@@ -317,10 +156,13 @@ router.post(
   validateRequest,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const productRef = db.collection('products').doc();
       const newProduct = {
-        ...req.body,
-        id: productRef.id,
+        title: req.body.title,
+        description: req.body.description,
+        price: req.body.price,
+        compareAtPrice: req.body.compareAtPrice || null,
+        category: req.body.category,
+        stock: req.body.stock,
         rating: req.body.rating || 5.0,
         reviewsCount: 0,
         images: req.body.images || [],
@@ -329,12 +171,19 @@ router.post(
         variants: req.body.variants || [],
         occasions: req.body.occasions || [],
         tags: req.body.tags || [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        isPremium: req.body.isPremium || false,
+        isBestSeller: req.body.isBestSeller || false,
       };
 
-      await productRef.set(newProduct);
-      return sendSuccess(res, newProduct, 'Product created successfully', 201);
+      const { data, error } = await supabase
+        .from('products')
+        .insert([newProduct])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return sendSuccess(res, data, 'Product created successfully', 201);
     } catch (error) {
       console.error('Error creating product:', error);
       return sendError(res, 'Failed to create product', 500);
@@ -351,26 +200,29 @@ router.put(
   requireAdmin,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const productRef = db.collection('products').doc(req.params.id);
-      const doc = await productRef.get();
-
-      if (!doc.exists) {
-        return sendError(res, 'Product not found', 404);
-      }
-
-      const updateData = {
-        ...req.body,
-        updatedAt: new Date().toISOString(),
-      };
-
+      const updateData = { ...req.body };
+      
       // Ensure id cannot be changed
       delete updateData.id;
       delete updateData.createdAt;
 
-      await productRef.update(updateData);
-      
-      const updatedDoc = await productRef.get();
-      return sendSuccess(res, updatedDoc.data(), 'Product updated successfully');
+      updateData.updatedAt = new Date().toISOString();
+
+      const { data, error } = await supabase
+        .from('products')
+        .update(updateData)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          return sendError(res, 'Product not found', 404);
+        }
+        throw error;
+      }
+
+      return sendSuccess(res, data, 'Product updated successfully');
     } catch (error) {
       console.error('Error updating product:', error);
       return sendError(res, 'Failed to update product', 500);
@@ -387,14 +239,15 @@ router.delete(
   requireAdmin,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const productRef = db.collection('products').doc(req.params.id);
-      const doc = await productRef.get();
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', req.params.id);
 
-      if (!doc.exists) {
-        return sendError(res, 'Product not found', 404);
+      if (error) {
+        throw error;
       }
 
-      await productRef.delete();
       return sendSuccess(res, { id: req.params.id }, 'Product deleted successfully');
     } catch (error) {
       console.error('Error deleting product:', error);

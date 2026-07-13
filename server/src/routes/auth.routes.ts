@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
@@ -8,7 +8,7 @@ import { sendSuccess, sendError } from '../utils/response';
 const router = Router();
 
 // @route   POST /api/auth/sync
-// @desc    Sync authenticated Firebase user details with Firestore database
+// @desc    Sync authenticated Supabase user details with profiles table
 // @access  Private
 router.post(
   '/sync',
@@ -21,42 +21,61 @@ router.post(
   validateRequest,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const { uid, role: authRole } = req.user!;
+      const { uid } = req.user!;
       const { email, name, phone } = req.body;
 
-      const userRef = db.collection('users').doc(uid);
-      const doc = await userRef.get();
+      const { data: doc, error: fetchError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', uid)
+        .single();
+
+      if (fetchError && fetchError.code !== 'PGRST116') {
+        throw fetchError;
+      }
 
       let userData: any = {
         email,
-        name: name || email.split('@')[0],
+        full_name: name || email.split('@')[0],
         phone: phone || '',
-        updatedAt: new Date().toISOString(),
       };
 
-      if (!doc.exists) {
+      if (!doc) {
         // If first user, make them Admin. Otherwise, read standard role
-        const usersCount = (await db.collection('users').limit(1).get()).size;
-        const assignedRole = usersCount === 0 || email === 'admin@sabi.com' ? 'admin' : 'customer';
+        const { count, error: countError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true });
+
+        const assignedRole = count === 0 || email === 'admin@sabi.com' ? 'admin' : 'user';
         
         userData = {
           ...userData,
           id: uid,
           role: assignedRole,
           addresses: [],
-          walletBalance: 0,
-          createdAt: new Date().toISOString(),
+          wallet_balance: 0,
         };
 
-        await userRef.set(userData);
+        const { error: insertError } = await supabase.from('profiles').insert([userData]);
+        if (insertError) throw insertError;
+        
         console.log(`Synced new user profile for ${email} with role: ${assignedRole}`);
       } else {
         // Keep existing role but update metadata
-        await userRef.update(userData);
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update(userData)
+          .eq('id', uid);
+        if (updateError) throw updateError;
       }
 
-      const updatedDoc = await userRef.get();
-      return sendSuccess(res, updatedDoc.data(), 'User profile synchronized');
+      const { data: updatedDoc } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', uid)
+        .single();
+
+      return sendSuccess(res, updatedDoc, 'User profile synchronized');
     } catch (error: any) {
       console.error('Error syncing user:', error);
       return sendError(res, 'Failed to synchronize user profile', 500);
@@ -70,14 +89,17 @@ router.post(
 router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: any) => {
   try {
     const { uid } = req.user!;
-    const userRef = db.collection('users').doc(uid);
-    const doc = await userRef.get();
+    const { data: doc, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', uid)
+      .single();
 
-    if (!doc.exists) {
+    if (error || !doc) {
       return sendError(res, 'User profile does not exist. Please sync first.', 404);
     }
 
-    return sendSuccess(res, doc.data(), 'User profile fetched');
+    return sendSuccess(res, doc, 'User profile fetched');
   } catch (error: any) {
     console.error('Error getting user profile:', error);
     return sendError(res, 'Failed to get user profile', 500);
@@ -114,15 +136,17 @@ router.post(
         isDefault: req.body.isDefault || false,
       };
 
-      const userRef = db.collection('users').doc(uid);
-      const doc = await userRef.get();
+      const { data: doc, error } = await supabase
+        .from('profiles')
+        .select('addresses')
+        .eq('id', uid)
+        .single();
 
-      if (!doc.exists) {
+      if (error || !doc) {
         return sendError(res, 'User profile not found', 404);
       }
 
-      const userData = doc.data()!;
-      let addresses: any[] = userData.addresses || [];
+      let addresses: any[] = doc.addresses || [];
 
       if (newAddress.isDefault) {
         // Set all other addresses to false
@@ -133,7 +157,13 @@ router.post(
       }
 
       addresses.push(newAddress);
-      await userRef.update({ addresses });
+      
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ addresses })
+        .eq('id', uid);
+
+      if (updateError) throw updateError;
 
       return sendSuccess(res, addresses, 'Address added successfully');
     } catch (error) {
@@ -152,15 +182,17 @@ router.put('/addresses/:id', requireAuth, async (req: AuthenticatedRequest, res:
     const addressId = req.params.id;
     const { label, street, city, state, zip, phone, isDefault } = req.body;
 
-    const userRef = db.collection('users').doc(uid);
-    const doc = await userRef.get();
+    const { data: doc, error } = await supabase
+        .from('profiles')
+        .select('addresses')
+        .eq('id', uid)
+        .single();
 
-    if (!doc.exists) {
+    if (error || !doc) {
       return sendError(res, 'User profile not found', 404);
     }
 
-    const userData = doc.data()!;
-    let addresses: any[] = userData.addresses || [];
+    let addresses: any[] = doc.addresses || [];
 
     const addressIndex = addresses.findIndex((addr) => addr.id === addressId);
     if (addressIndex === -1) {
@@ -186,7 +218,13 @@ router.put('/addresses/:id', requireAuth, async (req: AuthenticatedRequest, res:
       addresses[addressIndex] = targetAddress;
     }
 
-    await userRef.update({ addresses });
+    const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ addresses })
+        .eq('id', uid);
+
+    if (updateError) throw updateError;
+
     return sendSuccess(res, addresses, 'Address updated successfully');
   } catch (error) {
     console.error('Error updating address:', error);
@@ -202,15 +240,17 @@ router.delete('/addresses/:id', requireAuth, async (req: AuthenticatedRequest, r
     const { uid } = req.user!;
     const addressId = req.params.id;
 
-    const userRef = db.collection('users').doc(uid);
-    const doc = await userRef.get();
+    const { data: doc, error } = await supabase
+        .from('profiles')
+        .select('addresses')
+        .eq('id', uid)
+        .single();
 
-    if (!doc.exists) {
+    if (error || !doc) {
       return sendError(res, 'User not found', 404);
     }
 
-    const userData = doc.data()!;
-    let addresses: any[] = userData.addresses || [];
+    let addresses: any[] = doc.addresses || [];
 
     const filteredAddresses = addresses.filter((addr) => addr.id !== addressId);
     
@@ -219,7 +259,13 @@ router.delete('/addresses/:id', requireAuth, async (req: AuthenticatedRequest, r
       filteredAddresses[0].isDefault = true;
     }
 
-    await userRef.update({ addresses: filteredAddresses });
+    const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ addresses: filteredAddresses })
+        .eq('id', uid);
+
+    if (updateError) throw updateError;
+
     return sendSuccess(res, filteredAddresses, 'Address deleted successfully');
   } catch (error) {
     console.error('Error deleting address:', error);

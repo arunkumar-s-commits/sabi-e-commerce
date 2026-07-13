@@ -3,7 +3,7 @@ import { useAppDispatch, useAppSelector } from '../../store';
 import { toggleCart, toggleSearch, toggleMobileMenu, setMobileMenuOpen } from '../../store/slices/uiSlice';
 import { Search, Heart, ShoppingBag, User, Menu, X, ChevronDown, Award, Gift, Sparkles, Briefcase, Home, Box, Layers } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { auth, signOut } from '../../services/firebase';
+import { supabase } from '../../services/supabase';
 import { logoutSuccess } from '../../store/slices/authSlice';
 import logoImg from '../../assets/logo.png';
 
@@ -20,7 +20,7 @@ export const Header: React.FC = () => {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       dispatch(logoutSuccess());
       navigate('/');
     } catch (err) {

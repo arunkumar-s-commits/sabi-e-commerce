@@ -1,6 +1,6 @@
 import { Router, Request } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
@@ -13,17 +13,14 @@ const router = Router();
 router.get('/product/:productId', async (req: Request, res: any) => {
   try {
     const { productId } = req.params;
-    const snapshot = await db
-      .collection('reviews')
-      .where('productId', '==', productId)
-      .where('approved', '==', true)
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data: reviews, error } = await supabase
+      .from('reviews')
+      .select('*')
+      .eq('productId', productId)
+      .eq('approved', true)
+      .order('createdAt', { ascending: false });
 
-    const reviews: any[] = [];
-    snapshot.forEach((doc) => {
-      reviews.push(doc.data());
-    });
+    if (error) throw error;
 
     return sendSuccess(res, reviews, 'Reviews fetched successfully');
   } catch (error) {
@@ -51,15 +48,12 @@ router.post(
       const { productId, rating, comment, images } = req.body;
 
       // Verify product exists
-      const productRef = db.collection('products').doc(productId);
-      const productDoc = await productRef.get();
-      if (!productDoc.exists) {
+      const { data: productDoc } = await supabase.from('products').select('id').eq('id', productId).single();
+      if (!productDoc) {
         return sendError(res, 'Product not found', 404);
       }
 
-      const reviewRef = db.collection('reviews').doc();
       const newReview = {
-        id: reviewRef.id,
         productId,
         userId: uid,
         userName: name || email?.split('@')[0] || 'Anonymous',
@@ -68,13 +62,19 @@ router.post(
         images: images || [],
         approved: false, // Moderated by default
         featured: false,
-        createdAt: new Date().toISOString(),
       };
 
-      await reviewRef.set(newReview);
+      const { data: createdReview, error } = await supabase
+        .from('reviews')
+        .insert([newReview])
+        .select()
+        .single();
+        
+      if (error) throw error;
+
       return sendSuccess(
         res,
-        newReview,
+        createdReview,
         'Review submitted successfully! It will be visible once approved.',
         201
       );
@@ -90,11 +90,9 @@ router.post(
 // @access  Private/Admin
 router.get('/admin', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: any) => {
   try {
-    const snapshot = await db.collection('reviews').orderBy('createdAt', 'desc').get();
-    const reviews: any[] = [];
-    snapshot.forEach((doc) => {
-      reviews.push(doc.data());
-    });
+    const { data: reviews, error } = await supabase.from('reviews').select('*').order('createdAt', { ascending: false });
+    if (error) throw error;
+    
     return sendSuccess(res, reviews, 'All reviews fetched successfully');
   } catch (error) {
     console.error('Error fetching admin reviews:', error);
@@ -117,10 +115,9 @@ router.put(
   async (req: AuthenticatedRequest, res: any) => {
     try {
       const { id } = req.params;
-      const reviewRef = db.collection('reviews').doc(id);
-      const doc = await reviewRef.get();
+      const { data: doc } = await supabase.from('reviews').select('*').eq('id', id).single();
 
-      if (!doc.exists) {
+      if (!doc) {
         return sendError(res, 'Review not found', 404);
       }
 
@@ -129,38 +126,39 @@ router.put(
       if (approved !== undefined) updateData.approved = approved;
       if (featured !== undefined) updateData.featured = featured;
 
-      await reviewRef.update(updateData);
+      await supabase.from('reviews').update(updateData).eq('id', id);
 
       // Recalculate product overall rating if approved state changed
       if (approved === true) {
-        const reviewData = doc.data()!;
-        const productId = reviewData.productId;
+        const productId = doc.productId;
 
-        const allReviewsSnapshot = await db
-          .collection('reviews')
-          .where('productId', '==', productId)
-          .where('approved', '==', true)
-          .get();
+        const { data: allReviews } = await supabase
+          .from('reviews')
+          .select('rating, id')
+          .eq('productId', productId)
+          .eq('approved', true);
 
-        let totalRating = reviewData.rating;
+        let totalRating = doc.rating;
         let count = 1;
 
-        allReviewsSnapshot.forEach((rDoc) => {
-          if (rDoc.id !== id) {
-            totalRating += rDoc.data().rating;
-            count++;
-          }
-        });
+        if (allReviews) {
+          allReviews.forEach((rDoc: any) => {
+            if (rDoc.id !== id) {
+              totalRating += rDoc.rating;
+              count++;
+            }
+          });
+        }
 
         const newAvg = Number((totalRating / count).toFixed(1));
-        await db.collection('products').doc(productId).update({
+        await supabase.from('products').update({
           rating: newAvg,
           reviewsCount: count,
-        });
+        }).eq('id', productId);
       }
 
-      const updatedDoc = await reviewRef.get();
-      return sendSuccess(res, updatedDoc.data(), 'Review status updated');
+      const { data: updatedDoc } = await supabase.from('reviews').select('*').eq('id', id).single();
+      return sendSuccess(res, updatedDoc, 'Review status updated');
     } catch (error) {
       console.error('Error moderating review:', error);
       return sendError(res, 'Failed to update review status', 500);
@@ -174,14 +172,15 @@ router.put(
 router.delete('/admin/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: any) => {
   try {
     const { id } = req.params;
-    const reviewRef = db.collection('reviews').doc(id);
-    const doc = await reviewRef.get();
-
-    if (!doc.exists) {
+    
+    const { data: existing } = await supabase.from('reviews').select('id').eq('id', id).single();
+    if (!existing) {
       return sendError(res, 'Review not found', 404);
     }
 
-    await reviewRef.delete();
+    const { error } = await supabase.from('reviews').delete().eq('id', id);
+    if (error) throw error;
+    
     return sendSuccess(res, { id }, 'Review deleted successfully');
   } catch (error) {
     console.error('Error deleting review:', error);

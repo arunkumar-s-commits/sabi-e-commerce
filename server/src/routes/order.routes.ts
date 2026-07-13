@@ -1,6 +1,6 @@
 import { Router, Request } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { razorpay, verifyPaymentSignature } from '../config/razorpay';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
@@ -29,11 +29,15 @@ router.post(
 
       // Secure pricing check by fetching from DB instead of relying on frontend
       for (const item of items) {
-        const prodDoc = await db.collection('products').doc(item.productId).get();
-        if (!prodDoc.exists) {
+        const { data: prodData, error } = await supabase
+          .from('products')
+          .select('*')
+          .eq('id', item.productId)
+          .single();
+          
+        if (error || !prodData) {
           return sendError(res, `Product ${item.productId} not found`, 404);
         }
-        const prodData = prodDoc.data()!;
         
         let itemPrice = prodData.price;
         if (item.variantId) {
@@ -51,9 +55,13 @@ router.post(
       // Handle Coupon Discount
       let discount = 0;
       if (couponCode) {
-        const couponDoc = await db.collection('coupons').doc(couponCode.toUpperCase().trim()).get();
-        if (couponDoc.exists) {
-          const coupon = couponDoc.data()!;
+        const { data: coupon } = await supabase
+          .from('coupons')
+          .select('*')
+          .eq('code', couponCode.toUpperCase().trim())
+          .single();
+          
+        if (coupon) {
           if (
             coupon.isActive &&
             new Date(coupon.expiryDate).getTime() > Date.now() &&
@@ -117,7 +125,7 @@ router.post(
 );
 
 // @route   POST /api/orders/verify-payment
-// @desc    Verify payment signature and create Firestore Order record
+// @desc    Verify payment signature and create Supabase Order record
 // @access  Private
 router.post(
   '/verify-payment',
@@ -159,17 +167,16 @@ router.post(
       }
 
       // Check and update stock for all items
-      const batch = db.batch();
       for (const item of items) {
-        const prodRef = db.collection('products').doc(item.productId);
-        const prodDoc = await prodRef.get();
-        if (!prodDoc.exists) {
+        const { data: prodData } = await supabase.from('products').select('*').eq('id', item.productId).single();
+        if (!prodData) {
           return sendError(res, `Product ${item.productId} not found`, 404);
         }
-        const data = prodDoc.data()!;
         
+        let variants = prodData.variants || [];
+        let stock = prodData.stock;
+
         if (item.variantId) {
-          const variants = data.variants || [];
           const vIdx = variants.findIndex((v: any) => v.id === item.variantId);
           if (vIdx === -1) {
             return sendError(res, `Variant ${item.variantId} not found on product`, 400);
@@ -178,20 +185,19 @@ router.post(
             return sendError(res, `Insufficient stock for variant ${variants[vIdx].color || variants[vIdx].size}`, 400);
           }
           variants[vIdx].stock -= item.qty;
-          const totalStock = variants.reduce((sum: number, v: any) => sum + v.stock, 0);
-          batch.update(prodRef, { variants, stock: totalStock });
+          stock = variants.reduce((sum: number, v: any) => sum + v.stock, 0);
         } else {
-          if (data.stock < item.qty) {
-            return sendError(res, `Insufficient stock for product ${data.title}`, 400);
+          if (stock < item.qty) {
+            return sendError(res, `Insufficient stock for product ${prodData.title}`, 400);
           }
-          batch.update(prodRef, { stock: data.stock - item.qty });
+          stock -= item.qty;
         }
+
+        await supabase.from('products').update({ variants, stock }).eq('id', item.productId);
       }
 
       // Write Order Doc
-      const orderRef = db.collection('orders').doc();
       const newOrder = {
-        id: orderRef.id,
         userId: uid,
         customerName: name || email?.split('@')[0] || 'Guest',
         items,
@@ -207,15 +213,22 @@ router.post(
         trackingNumber: '',
         giftWrapping: giftWrapping || false,
         couponApplied: couponApplied || '',
-        invoiceUrl: `/invoices/inv_${orderRef.id}.pdf`, // Generated on client or served dynamically
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        invoiceUrl: '', // Generated on client or served dynamically
       };
 
-      batch.set(orderRef, newOrder);
-      await batch.commit();
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .insert([newOrder])
+        .select()
+        .single();
+        
+      if (orderError) throw orderError;
 
-      return sendSuccess(res, newOrder, 'Order placed successfully', 201);
+      // Update invoiceUrl with ID
+      const updatedOrder = { ...orderData, invoiceUrl: `/invoices/inv_${orderData.id}.pdf` };
+      await supabase.from('orders').update({ invoiceUrl: updatedOrder.invoiceUrl }).eq('id', orderData.id);
+
+      return sendSuccess(res, updatedOrder, 'Order placed successfully', 201);
     } catch (error) {
       console.error('Error verifying payment/creating order:', error);
       return sendError(res, 'Failed to complete checkout process', 500);
@@ -229,16 +242,13 @@ router.post(
 router.get('/my-orders', requireAuth, async (req: AuthenticatedRequest, res: any) => {
   try {
     const { uid } = req.user!;
-    const snapshot = await db
-      .collection('orders')
-      .where('userId', '==', uid)
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('userId', uid)
+      .order('createdAt', { ascending: false });
 
-    const orders: any[] = [];
-    snapshot.forEach((doc) => {
-      orders.push(doc.data());
-    });
+    if (error) throw error;
 
     return sendSuccess(res, orders, 'User orders fetched successfully');
   } catch (error) {
@@ -253,13 +263,12 @@ router.get('/my-orders', requireAuth, async (req: AuthenticatedRequest, res: any
 router.get('/:id', requireAuth, async (req: AuthenticatedRequest, res: any) => {
   try {
     const { uid, role } = req.user!;
-    const orderDoc = await db.collection('orders').doc(req.params.id).get();
+    const { data: orderData, error } = await supabase.from('orders').select('*').eq('id', req.params.id).single();
 
-    if (!orderDoc.exists) {
+    if (error || !orderData) {
       return sendError(res, 'Order not found', 404);
     }
 
-    const orderData = orderDoc.data()!;
     // Secure authorization - only admin or owner can read
     if (role !== 'admin' && orderData.userId !== uid) {
       return sendError(res, 'Unauthorized to view this order', 403);
@@ -277,11 +286,9 @@ router.get('/:id', requireAuth, async (req: AuthenticatedRequest, res: any) => {
 // @access  Private/Admin
 router.get('/admin/all', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: any) => {
   try {
-    const snapshot = await db.collection('orders').orderBy('createdAt', 'desc').get();
-    const orders: any[] = [];
-    snapshot.forEach((doc) => {
-      orders.push(doc.data());
-    });
+    const { data: orders, error } = await supabase.from('orders').select('*').order('createdAt', { ascending: false });
+    if (error) throw error;
+    
     return sendSuccess(res, orders, 'All orders fetched successfully');
   } catch (error) {
     console.error('Error fetching all orders:', error);
@@ -305,10 +312,8 @@ router.put(
   validateRequest,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const orderRef = db.collection('orders').doc(req.params.id);
-      const doc = await orderRef.get();
-
-      if (!doc.exists) {
+      const { data: order } = await supabase.from('orders').select('id').eq('id', req.params.id).single();
+      if (!order) {
         return sendError(res, 'Order not found', 404);
       }
 
@@ -322,10 +327,16 @@ router.put(
         updateData.trackingNumber = trackingNumber;
       }
 
-      await orderRef.update(updateData);
-      const updatedDoc = await orderRef.get();
+      const { data: updatedDoc, error } = await supabase
+        .from('orders')
+        .update(updateData)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+        
+      if (error) throw error;
 
-      return sendSuccess(res, updatedDoc.data(), 'Order status updated successfully');
+      return sendSuccess(res, updatedDoc, 'Order status updated successfully');
     } catch (error) {
       console.error('Error updating order:', error);
       return sendError(res, 'Failed to update order details', 500);

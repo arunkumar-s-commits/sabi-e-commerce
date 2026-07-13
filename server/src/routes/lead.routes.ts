@@ -1,6 +1,6 @@
 import { Router, Request } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
@@ -25,23 +25,21 @@ router.post(
     try {
       const { name, phone, email, eventDate, quantity, budget, productPreference } = req.body;
       
-      const leadRef = db.collection('weddingLeads').doc();
       const newLead = {
-        id: leadRef.id,
         name,
         phone,
         email: email || '',
-        eventDate,
-        quantity: Number(quantity),
-        budget: Number(budget),
-        productPreference: productPreference || '',
+        requirements: `Event Date: ${eventDate}\nProduct Preference: ${productPreference || 'None'}\nQuantity: ${quantity}`,
+        budget: String(budget),
         status: 'new',
+        type: 'wedding',
         notes: '',
-        createdAt: new Date().toISOString(),
       };
 
-      await leadRef.set(newLead);
-      return sendSuccess(res, newLead, 'Wedding inquiry submitted successfully! Our expert will call you within 24 hours.', 201);
+      const { data, error } = await supabase.from('leads').insert([newLead]).select().single();
+      if (error) throw error;
+
+      return sendSuccess(res, data, 'Wedding inquiry submitted successfully! Our expert will call you within 24 hours.', 201);
     } catch (error) {
       console.error('Error submitting wedding lead:', error);
       return sendError(res, 'Failed to submit wedding inquiry', 500);
@@ -67,24 +65,22 @@ router.post(
     try {
       const { companyName, contactPerson, phone, email, gstNumber, quantity, budget, requirements } = req.body;
 
-      const leadRef = db.collection('corporateLeads').doc();
       const newLead = {
-        id: leadRef.id,
-        companyName,
-        contactPerson,
+        name: contactPerson,
         phone,
         email: email || '',
-        gstNumber: gstNumber || '',
-        quantity: Number(quantity),
-        budget: Number(budget),
-        requirements,
+        company: companyName,
+        requirements: `GST: ${gstNumber || 'None'}\nQuantity: ${quantity}\nRequirements: ${requirements}`,
+        budget: String(budget),
         status: 'new',
+        type: 'corporate',
         notes: '',
-        createdAt: new Date().toISOString(),
       };
 
-      await leadRef.set(newLead);
-      return sendSuccess(res, newLead, 'Corporate inquiry submitted successfully! Our manager will email a customized catalog.', 201);
+      const { data, error } = await supabase.from('leads').insert([newLead]).select().single();
+      if (error) throw error;
+
+      return sendSuccess(res, data, 'Corporate inquiry submitted successfully! Our manager will email a customized catalog.', 201);
     } catch (error) {
       console.error('Error submitting corporate lead:', error);
       return sendError(res, 'Failed to submit corporate inquiry', 500);
@@ -93,28 +89,16 @@ router.post(
 );
 
 // @route   GET /api/leads/admin/all
-// @desc    Get all leads from both categories (Admin only)
+// @desc    Get all leads (Admin only)
 // @access  Private/Admin
 router.get('/admin/all', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: any) => {
   try {
-    const weddingSnapshot = await db.collection('weddingLeads').orderBy('createdAt', 'desc').get();
-    const corporateSnapshot = await db.collection('corporateLeads').orderBy('createdAt', 'desc').get();
+    const { data: allLeads, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('createdAt', { ascending: false });
 
-    const weddingLeads: any[] = [];
-    const corporateLeads: any[] = [];
-
-    weddingSnapshot.forEach((doc) => {
-      weddingLeads.push({ ...doc.data(), type: 'wedding' });
-    });
-
-    corporateSnapshot.forEach((doc) => {
-      corporateLeads.push({ ...doc.data(), type: 'corporate' });
-    });
-
-    // Combine and sort by date
-    const allLeads = [...weddingLeads, ...corporateLeads].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    if (error) throw error;
 
     return sendSuccess(res, allLeads, 'All leads fetched successfully');
   } catch (error) {
@@ -137,26 +121,30 @@ router.put(
   validateRequest,
   async (req: AuthenticatedRequest, res: any) => {
     try {
-      const { type, id } = req.params;
-      const collectionName = type === 'wedding' ? 'weddingLeads' : 'corporateLeads';
+      const { id } = req.params; // type is no longer needed since it's merged
       
-      const leadRef = db.collection(collectionName).doc(id);
-      const doc = await leadRef.get();
+      const { data: doc } = await supabase.from('leads').select('id').eq('id', id).single();
 
-      if (!doc.exists) {
+      if (!doc) {
         return sendError(res, 'Lead not found', 404);
       }
 
       const { status, notes } = req.body;
-      const updateData: any = { status };
+      const updateData: any = { status, updatedAt: new Date().toISOString() };
       if (notes !== undefined) {
         updateData.notes = notes;
       }
 
-      await leadRef.update(updateData);
-      const updatedDoc = await leadRef.get();
+      const { data: updatedDoc, error } = await supabase
+        .from('leads')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+        
+      if (error) throw error;
 
-      return sendSuccess(res, { ...updatedDoc.data(), type }, 'Lead status updated');
+      return sendSuccess(res, updatedDoc, 'Lead status updated');
     } catch (error) {
       console.error('Error updating lead status:', error);
       return sendError(res, 'Failed to update lead status', 500);

@@ -1,74 +1,33 @@
 import { Router, Request } from 'express';
 import { body } from 'express-validator';
-import { db } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { validateRequest } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
 
 const router = Router();
 
-const SEED_COUPONS = [
-  {
-    code: 'WELCOME10',
-    type: 'percentage',
-    value: 10,
-    minOrderValue: 500,
-    expiryDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(), // 90 days
-    isActive: true,
-  },
-  {
-    code: 'SABI500',
-    type: 'flat',
-    value: 500,
-    minOrderValue: 3000,
-    expiryDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(), // 60 days
-    isActive: true,
-  },
-  {
-    code: 'FREESHIP',
-    type: 'free_shipping',
-    value: 0,
-    minOrderValue: 1000,
-    expiryDate: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000).toISOString(),
-    isActive: true,
-  }
-];
-
-// Seed Coupons
-const seedCouponsIfEmpty = async () => {
-  try {
-    const snap = await db.collection('coupons').limit(1).get();
-    if (snap.empty) {
-      console.log('Seeding initial coupons...');
-      const batch = db.batch();
-      for (const coup of SEED_COUPONS) {
-        const docRef = db.collection('coupons').doc(coup.code);
-        batch.set(docRef, coup);
-      }
-      await batch.commit();
-      console.log('Initial coupons seeded.');
-    }
-  } catch (err) {
-    console.error('Error seeding coupons:', err);
-  }
-};
-
-seedCouponsIfEmpty();
-
 // @route   GET /api/coupons
 // @desc    Get all active coupons (public)
 // @access  Public
 router.get('/', async (req: Request, res: any) => {
   try {
-    const snapshot = await db.collection('coupons').where('isActive', '==', true).get();
+    const { data: snapshot, error } = await supabase
+      .from('coupons')
+      .select('*')
+      .eq('isActive', true);
+      
+    if (error) throw error;
+    
     const coupons: any[] = [];
-    snapshot.forEach((doc) => {
-      const data = doc.data();
-      // Only return non-expired coupons
-      if (new Date(data.expiryDate).getTime() > Date.now()) {
-        coupons.push(data);
-      }
-    });
+    if (snapshot) {
+      snapshot.forEach((data: any) => {
+        // Only return non-expired coupons
+        if (new Date(data.expiryDate).getTime() > Date.now()) {
+          coupons.push(data);
+        }
+      });
+    }
     return sendSuccess(res, coupons, 'Coupons fetched successfully');
   } catch (error) {
     console.error('Error fetching coupons:', error);
@@ -92,14 +51,15 @@ router.post(
       const code = (req.body.code as string).toUpperCase().trim();
       const subtotal = parseFloat(req.body.subtotal);
 
-      const couponRef = db.collection('coupons').doc(code);
-      const doc = await couponRef.get();
+      const { data: coupon, error } = await supabase
+        .from('coupons')
+        .select('*')
+        .eq('code', code)
+        .single();
 
-      if (!doc.exists) {
+      if (error || !coupon) {
         return sendError(res, 'Invalid coupon code.', 400);
       }
-
-      const coupon = doc.data()!;
 
       if (!coupon.isActive) {
         return sendError(res, 'This coupon is no longer active.', 400);
@@ -161,10 +121,10 @@ router.post(
   async (req: AuthenticatedRequest, res: any) => {
     try {
       const code = req.body.code.toUpperCase().trim();
-      const docRef = db.collection('coupons').doc(code);
-      const doc = await docRef.get();
+      
+      const { data: doc } = await supabase.from('coupons').select('code').eq('code', code).single();
 
-      if (doc.exists) {
+      if (doc) {
         return sendError(res, 'Coupon code already exists', 400);
       }
 
@@ -177,7 +137,9 @@ router.post(
         isActive: req.body.isActive !== undefined ? req.body.isActive : true,
       };
 
-      await docRef.set(newCoupon);
+      const { error: insertError } = await supabase.from('coupons').insert([newCoupon]);
+      if (insertError) throw insertError;
+
       return sendSuccess(res, newCoupon, 'Coupon created successfully', 201);
     } catch (error) {
       console.error('Error creating coupon:', error);
@@ -192,14 +154,15 @@ router.post(
 router.delete('/:code', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: any) => {
   try {
     const code = req.params.code.toUpperCase().trim();
-    const docRef = db.collection('coupons').doc(code);
-    const doc = await docRef.get();
+    const { data: doc } = await supabase.from('coupons').select('code').eq('code', code).single();
 
-    if (!doc.exists) {
+    if (!doc) {
       return sendError(res, 'Coupon not found', 404);
     }
 
-    await docRef.delete();
+    const { error } = await supabase.from('coupons').delete().eq('code', code);
+    if (error) throw error;
+    
     return sendSuccess(res, { code }, 'Coupon deleted successfully');
   } catch (error) {
     console.error('Error deleting coupon:', error);
