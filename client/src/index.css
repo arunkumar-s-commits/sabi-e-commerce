@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #2563EB;
+  --color-secondary: #7C3AED;
+  --color-success: #10B981;
+  --color-gold: #D4AF37;
+  --color-gold-hover: #C5A030;
+  --color-border: #E5E7EB;
+  --color-dark: #111827;
+  --color-muted: #6B7280;
+  --color-bg-secondary: #F8FAFC;
+  
+  --font-sans: "Inter", "DM Sans", system-ui, sans-serif;
+  --font-display: "Poppins", "Inter", system-ui, sans-serif;
+}
+
+/* Custom Gifting Brand UI Overrides */
+@layer base {
+  body {
+    background-color: #FFFFFF;
+    color: #111827;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    font-weight: 600;
+  }
+}
+
+/* Luxury Glassmorphism overlays */
+.glass-premium {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(229, 231, 235, 0.5);
+}
+
+.glass-premium-dark {
+  background: rgba(17, 24, 39, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Custom Scrollbar for Luxury Aesthetics */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F8FAFC;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D4AF37;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C5A030;
+}
+
+/* Smooth zoom transition helper */
+.zoom-effect {
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.zoom-effect:hover {
+  transform: scale(1.05);
+}
+
+/* Premium Gold Text Gradient */
+.gold-text-gradient {
+  background: linear-gradient(135deg, #BF953F 0%, #FCF6BA 25%, #B38728 50%, #FBF5B7 75%, #AA771C 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Fine micro-interactions */
+.interactive-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.interactive-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(212, 175, 55, 0.08);
+}
